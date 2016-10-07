@@ -335,35 +335,11 @@ public final class OAuthTokenCredential {
 		this.expires = -1;
 	}
 
-	private String generateAccessToken() throws PayPalRESTException {
+	private synchronized String generateAccessToken() throws PayPalRESTException {
 		String generatedToken = null;
+		HttpConnection connection;
+		HttpConfiguration httpConfiguration;
 		String base64ClientID = generateBase64String(clientID + ":" + clientSecret);
-		generatedToken = generateOAuthToken(base64ClientID);
-		return generatedToken;
-	}
-
-	/*
-	 * Generate a Base64 encoded String from clientID & clientSecret
-	 */
-	private String generateBase64String(String clientCredentials) throws PayPalRESTException {
-		String base64ClientID = null;
-		byte[] encoded = null;
-		try {
-			encoded = Base64.encodeBase64(clientCredentials.getBytes("UTF-8"));
-			base64ClientID = new String(encoded, "UTF-8");
-		} catch (UnsupportedEncodingException e) {
-			throw new PayPalRESTException(e.getMessage(), e);
-		}
-		return base64ClientID;
-	}
-
-	/*
-	 * Generate OAuth type token from Base64Client ID
-	 */
-	private String generateOAuthToken(String base64ClientID) throws PayPalRESTException {
-		HttpConnection connection = null;
-		HttpConfiguration httpConfiguration = null;
-		String generatedToken = null;
 		try {
 			connection = ConnectionManager.getInstance().getConnection();
 			httpConfiguration = getOAuthHttpConfiguration();
@@ -415,6 +391,21 @@ public final class OAuthTokenCredential {
 			this.headers.put(Constants.HTTP_CONTENT_TYPE_HEADER, Constants.HTTP_CONTENT_TYPE_JSON);
 		}
 		return generatedToken;
+	}
+
+	/*
+	 * Generate a Base64 encoded String from clientID & clientSecret
+	 */
+	private String generateBase64String(String clientCredentials) throws PayPalRESTException {
+		String base64ClientID = null;
+		byte[] encoded = null;
+		try {
+			encoded = Base64.encodeBase64(clientCredentials.getBytes("UTF-8"));
+			base64ClientID = new String(encoded, "UTF-8");
+		} catch (UnsupportedEncodingException e) {
+			throw new PayPalRESTException(e.getMessage(), e);
+		}
+		return base64ClientID;
 	}
 
 	/**
