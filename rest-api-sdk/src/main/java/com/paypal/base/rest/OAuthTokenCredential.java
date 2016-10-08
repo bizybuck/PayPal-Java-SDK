@@ -53,7 +53,7 @@ public final class OAuthTokenCredential {
 	/**
 	 * Access Token that is generated
 	 */
-	private String accessToken;
+	private volatile String accessToken;
 
 	/**
 	 * Headers
@@ -220,10 +220,16 @@ public final class OAuthTokenCredential {
 	 * @throws PayPalRESTException
 	 */
 	public String getAccessToken() throws PayPalRESTException {
-		if (accessToken == null || (hasCredentials() && expiresIn() <= 0)) {
-			accessToken = generateAccessToken();
+		String token = accessToken;
+		if (token == null || (hasCredentials() && expiresIn() <= 0)) {
+			synchronized (this) {
+				token = accessToken;
+				if (token == null || (hasCredentials() && expiresIn() <= 0)) {
+					token = accessToken  = generateAccessToken();
+				}
+			}
 		}
-		return accessToken;
+		return token;
 	}
 
 	/**
