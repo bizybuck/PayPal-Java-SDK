@@ -63,7 +63,7 @@ public final class OAuthTokenCredential {
 	/**
 	 * Lifetime in seconds of the access token
 	 */
-	private long expires = 0;
+	private volatile long expires = 0;
 
 	private String refreshToken;
 
@@ -220,16 +220,24 @@ public final class OAuthTokenCredential {
 	 * @throws PayPalRESTException
 	 */
 	public String getAccessToken() throws PayPalRESTException {
-		String token = accessToken;
-		if (token == null || (hasCredentials() && expiresIn() <= 0)) {
+		if (needsRegeneration()) {
 			synchronized (this) {
-				token = accessToken;
-				if (token == null || (hasCredentials() && expiresIn() <= 0)) {
-					token = accessToken  = generateAccessToken();
+				if (needsRegeneration()) {
+					generateAccessToken();
 				}
 			}
 		}
-		return token;
+		return accessToken;
+	}
+
+	/**
+	 * Checks if the access token is expired or null.
+	 *
+	 * @return true if expired or null, and can be regenerated.
+	 * false otherwise
+	 */
+	private boolean needsRegeneration() {
+		return (accessToken == null || (hasCredentials() && expiresIn() <= 0));
 	}
 
 	/**
@@ -341,8 +349,7 @@ public final class OAuthTokenCredential {
 		this.expires = -1;
 	}
 
-	private synchronized String generateAccessToken() throws PayPalRESTException {
-		String generatedToken = null;
+	private synchronized void generateAccessToken() throws PayPalRESTException {
 		HttpConnection connection;
 		HttpConfiguration httpConfiguration;
 		String base64ClientID = generateBase64String(clientID + ":" + clientSecret);
@@ -375,13 +382,13 @@ public final class OAuthTokenCredential {
 			String jsonResponse = connection.execute("", postRequest, this.headers);
 			if (!Constants.LIVE.equalsIgnoreCase(mode)) {
 				log.debug("response header: " + connection.getResponseHeaderMap().toString());
-				log.debug("response: " + jsonResponse.toString());
+				log.debug("response: " + jsonResponse);
 			}
 
 			// parse response as JSON object
 			JsonParser parser = new JsonParser();
 			JsonElement jsonElement = parser.parse(jsonResponse);
-			generatedToken = jsonElement.getAsJsonObject().get("token_type").getAsString() + " "
+			accessToken = jsonElement.getAsJsonObject().get("token_type").getAsString() + " "
 					+ jsonElement.getAsJsonObject().get("access_token").getAsString();
 			// Save expiry date
 			long tokenLifeTime = jsonElement.getAsJsonObject().get("expires_in").getAsLong();
@@ -396,7 +403,6 @@ public final class OAuthTokenCredential {
 			// Replace the headers back to JSON for any future use.
 			this.headers.put(Constants.HTTP_CONTENT_TYPE_HEADER, Constants.HTTP_CONTENT_TYPE_JSON);
 		}
-		return generatedToken;
 	}
 
 	/*
