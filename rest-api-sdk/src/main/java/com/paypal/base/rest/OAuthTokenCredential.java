@@ -16,6 +16,7 @@ import java.net.MalformedURLException;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * OAuthTokenCredential is used for generation of OAuth Token used by PayPal
@@ -35,6 +36,8 @@ public final class OAuthTokenCredential {
 
 	private static final Logger log = LoggerFactory.getLogger(OAuthTokenCredential.class);
 
+	private static Map<String, AccessToken> ACCESS_TOKENS = new ConcurrentHashMap<String, AccessToken>();
+
 	/**
 	 * OAuth URI path parameter
 	 */
@@ -51,21 +54,18 @@ public final class OAuthTokenCredential {
 	private String clientSecret;
 
 	/**
-	 * Access Token that is generated
-	 */
-	private volatile String accessToken;
-
-	/**
 	 * Headers
 	 */
 	private Map<String, String> headers = new HashMap<String, String>();
 
-	/**
-	 * Lifetime in seconds of the access token
-	 */
-	private volatile long expires = 0;
-
 	private String refreshToken;
+
+	/**
+	 * @deprecated This field is only used when OAuthTokenCredential is initialized with access token only.
+	 *
+	 */
+	@Deprecated
+	private AccessToken __accessToken;
 
 	/**
 	 * Map used for dynamic configuration
@@ -94,7 +94,7 @@ public final class OAuthTokenCredential {
 	 * @param accessToken
 	 */
 	OAuthTokenCredential(String accessToken) {
-		this.accessToken = accessToken;
+		__accessToken = new AccessToken(accessToken, 1);
 	}
 
 	/**
@@ -142,12 +142,11 @@ public final class OAuthTokenCredential {
 	 * @param refreshToken
 	 * @return {@link OAuthTokenCredential}
 	 */
-	OAuthTokenCredential setRefreshToken(String refreshToken) {
+	synchronized OAuthTokenCredential setRefreshToken(String refreshToken) {
 		if (!this.hasCredentials()) {
 			throw new IllegalArgumentException("ClientID and Secret are required. Please use OAuthTokenCredential(String clientID, String clientSecret)");
 		}
 		this.refreshToken = refreshToken;
-		this.resetAccessToken();
 		return this;
 	}
 
@@ -219,15 +218,14 @@ public final class OAuthTokenCredential {
 	 * @return the accessToken
 	 * @throws PayPalRESTException
 	 */
-	public String getAccessToken() throws PayPalRESTException {
-		if (needsRegeneration()) {
-			synchronized (this) {
-				if (needsRegeneration()) {
-					generateAccessToken();
-				}
-			}
+	public synchronized String getAccessToken() throws PayPalRESTException {
+		if (__accessToken != null) {
+			return __accessToken.getAccessToken();
 		}
-		return accessToken;
+		if (isRegenerationRequired()) {
+			generateAccessToken();
+		}
+		return ACCESS_TOKENS.get(getCacheTokenKey()).getAccessToken();
 	}
 
 	/**
@@ -236,8 +234,13 @@ public final class OAuthTokenCredential {
 	 * @return true if expired or null, and can be regenerated.
 	 * false otherwise
 	 */
-	private boolean needsRegeneration() {
-		return (accessToken == null || (hasCredentials() && expiresIn() <= 0));
+	private boolean isRegenerationRequired() {
+		AccessToken token = ACCESS_TOKENS.get(getCacheTokenKey());
+		if (token == null) {
+			return hasCredentials();
+		} else {
+			return (token.getAccessToken() == null || (hasCredentials() && token.expiresIn() <= 0));
+		}
 	}
 
 	/**
@@ -270,16 +273,7 @@ public final class OAuthTokenCredential {
 		return this.clientSecret;
 	}
 
-	/**
-	 * Specifies how long this token can be used for placing API calls. The
-	 * remaining lifetime is given in seconds.
-	 * 
-	 * @return remaining lifetime of this access token in seconds
-	 */
-	public long expiresIn() {
-		return expires - new java.util.Date().getTime() / 1000;
-	}
-	
+
 	/**
 	 * Adds configuration to list of configurations.
 	 * 
@@ -341,14 +335,6 @@ public final class OAuthTokenCredential {
 		return null;
 	}
 
-	/**
-	 * Resets Access Token
-	 */
-	private void resetAccessToken() {
-		this.accessToken = null;
-		this.expires = -1;
-	}
-
 	private synchronized void generateAccessToken() throws PayPalRESTException {
 		HttpConnection connection;
 		HttpConfiguration httpConfiguration;
@@ -388,11 +374,12 @@ public final class OAuthTokenCredential {
 			// parse response as JSON object
 			JsonParser parser = new JsonParser();
 			JsonElement jsonElement = parser.parse(jsonResponse);
-			accessToken = jsonElement.getAsJsonObject().get("token_type").getAsString() + " "
+			String accessToken = jsonElement.getAsJsonObject().get("token_type").getAsString() + " "
 					+ jsonElement.getAsJsonObject().get("access_token").getAsString();
 			// Save expiry date
 			long tokenLifeTime = jsonElement.getAsJsonObject().get("expires_in").getAsLong();
-			expires = new Date().getTime() / 1000 + tokenLifeTime;
+			long expires = new Date().getTime() / 1000 + tokenLifeTime;
+			ACCESS_TOKENS.put(getCacheTokenKey(), new AccessToken(accessToken, expires));
 		} catch (ClientActionRequiredException e) {
 			throw PayPalRESTException.createFromHttpErrorException(e);
 		} catch (HttpErrorException e) {
@@ -403,6 +390,10 @@ public final class OAuthTokenCredential {
 			// Replace the headers back to JSON for any future use.
 			this.headers.put(Constants.HTTP_CONTENT_TYPE_HEADER, Constants.HTTP_CONTENT_TYPE_JSON);
 		}
+	}
+
+	private String getCacheTokenKey() {
+		return clientID + ":" + clientSecret + ":" + refreshToken;
 	}
 
 	/*
